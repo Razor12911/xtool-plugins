@@ -1,0 +1,2 @@
+PAK_DECRYPT_DLL RCDATA "PakDecrypt.dll"
+CRYSIS3_ZIP RCDATA "crysis3.zip"

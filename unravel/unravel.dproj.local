@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<BorlandProject>
+	<Transactions>
+    <Transaction>2021/05/25 13:25:18.000.476,C:\Users\Zee\Documents\Embarcadero\Studio\Projects\unravel.dproj=C:\Users\Zee\Documents\Embarcadero\Studio\Projects\Project12.dproj</Transaction>
+    <Transaction>2021/05/25 13:25:35.000.320,D:\xtool_2020\_plugins\unravel\unravel.dproj=C:\Users\Zee\Documents\Embarcadero\Studio\Projects\unravel.dproj</Transaction>
+    <Transaction>2021/05/25 13:27:13.000.432,=D:\xtool_2020\_plugins\unravel\Utils.pas</Transaction>
+    <Transaction>2021/05/25 13:27:33.000.200,=D:\xtool_2020\_plugins\unravel\LZ4DLL.pas</Transaction>
+  </Transactions>
+</BorlandProject>

@@ -1,0 +1,376 @@
+library cryengine;
+
+{$R *.res}
+{$SETPEOSVERSION 6.0}
+{$SETPESUBSYSVERSION 6.0}
+{$WEAKLINKRTTI ON}
+{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS([])}
+{$POINTERMATH ON}
+{$R *.dres}
+
+uses
+  WinAPI.Windows,
+  System.SysUtils,
+  System.Types,
+  System.Classes,
+  System.StrUtils,
+  System.IOUtils,
+  System.Math,
+  System.Zip,
+  Utils in 'Utils.pas',
+  FuncHook in 'Delphi_MemoryModule\FuncHook.pas',
+  MemoryModule in 'Delphi_MemoryModule\MemoryModule.pas',
+  MemoryModuleHook in 'Delphi_MemoryModule\MemoryModuleHook.pas';
+
+const
+  XTOOL_DB = $42445458;
+
+function GetModuleName: string;
+var
+  szFileName: array [0 .. MAX_PATH] of char;
+begin
+  FillChar(szFileName, sizeof(szFileName), #0);
+  GetModuleFileName(hInstance, szFileName, MAX_PATH);
+  Result := szFileName;
+end;
+
+var
+  decrypt: function(data: Pointer; len: Integer; key: Pointer; iv: Pointer)
+    : Boolean cdecl;
+  encrypt: function(data: Pointer; len: Integer; key: Pointer; iv: Pointer)
+    : Boolean cdecl;
+
+const
+  Codecs: array of PChar = ['crysis3'];
+  CODEC_COUNT = 1;
+  CRYSIS3_CODEC = 0;
+
+type
+  TMD5Digest = packed array [0 .. 15] of byte;
+
+  PEntryStruct = ^TEntryStruct;
+
+  TEntryStruct = record
+    Position: Int64;
+    OldSize, NewSize: Integer;
+  end;
+
+  PSearchStruct = ^TSearchStruct;
+
+  TSearchStruct = record
+    Name: String;
+    SearchInt: Int64;
+    HashSize: Integer;
+    HashDigest: TMD5Digest;
+    Codec: String;
+    Resource: Integer;
+    EntryList: TArray<TEntryStruct>;
+  end;
+
+  PListEntry = ^TListEntry;
+
+  TListEntry = packed record
+    Offset: Integer;
+    Size: Integer;
+    key, IVector: array [0 .. 15] of byte;
+  end;
+
+procedure ShowMessage(Msg: string; Caption: string = '');
+begin
+  MessageBox(0, PChar(Msg), PChar(Caption), MB_OK or MB_TASKMODAL);
+end;
+
+var
+  SearchList: TStringDynArray;
+  SearchInfo: TArray<TArray<TArray<Integer>>>;
+  SearchCount: TArray<TArray<Integer>>;
+  CodecSearch: TArray<TArray<TSearchStruct>>;
+  CodecAvailable, CodecEnabled: TArray<Boolean>;
+  ZIPFile: TArray<TZipFile>;
+  ZIPStream: TArray<TResourceStream>;
+  ZIPBytes: TArray<TArray<TBytes>>;
+
+function PrecompInit(Command: PChar; Count: Integer; Funcs: PPrecompFuncs)
+  : Boolean cdecl;
+var
+  I: Integer;
+  X, Y, Z: Integer;
+  S: String;
+begin
+  Result := True;
+  SetLength(ZIPFile, Count);
+  for X := Low(ZIPFile) to High(ZIPFile) do
+    ZIPFile[X] := TZipFile.Create;
+  for X := Low(CodecAvailable) to High(CodecAvailable) do
+  begin
+    CodecAvailable[X] := True;
+    CodecEnabled[X] := False;
+  end;
+  X := 0;
+  while Funcs^.GetCodec(Command, X, False) <> '' do
+  begin
+    S := String(Funcs^.GetCodec(Command, X, False));
+    for Y := Low(Codecs) to High(Codecs) do
+    begin
+      if CompareText(S, String(Codecs[Y])) = 0 then
+      begin
+        CodecEnabled[Y] := True;
+        break;
+      end;
+    end;
+    Inc(X);
+  end;
+  for X := Low(CodecEnabled) to High(CodecEnabled) do
+    if CodecEnabled[X] then
+    begin
+      SetLength(SearchInfo[X], $FFFF);
+      SetLength(SearchCount[X], $FFFF);
+      for Z := Low(SearchInfo[X]) to High(SearchInfo[X]) do
+      begin
+        SearchCount[X, Z] := 0;
+        I := 0;
+        for Y := Low(CodecSearch[X]) to High(CodecSearch[X]) do
+        begin
+          LongRec(I).Words[0] := Int64Rec(CodecSearch[X, Y].SearchInt).Words[0];
+          if Z = I then
+          begin
+            Inc(SearchCount[X, Z]);
+            Insert(Y, SearchInfo[X, Z], Length(SearchInfo[X, Z]));
+          end;
+        end;
+      end;
+    end;
+end;
+
+procedure PrecompFree(Funcs: PPrecompFuncs)cdecl;
+var
+  X, Y, Z: Integer;
+begin
+  for X := Low(ZIPFile) to High(ZIPFile) do
+    ZIPFile[X] := TZipFile.Create;
+  for X := Low(CodecEnabled) to High(CodecEnabled) do
+    if CodecEnabled[X] then
+    begin
+      for Y := Low(SearchInfo[X]) to High(SearchInfo[X]) do
+        SetLength(SearchInfo[X, Y], 0);
+      SetLength(SearchInfo[X], 0);
+      SetLength(SearchCount[X], 0);
+    end;
+end;
+
+function PrecompCodec(Index: Integer): PChar cdecl;
+begin
+  Result := nil;
+  if Index in [Integer(Low(Codecs)), Integer(High(Codecs))] then
+    Result := Codecs[Index];
+end;
+
+procedure PrecompScan1(Instance: Integer; Input: PByte; Size, SizeEx: Cardinal;
+  Output: TPrecompOutput; Add: TPrecompAdd; Funcs: PPrecompFuncs)cdecl;
+var
+  I: Integer;
+  J: Word;
+  X, Y, Z: Integer;
+  Pos, LSize: NativeInt;
+  SI: TStrInfo1;
+  SS: PSearchStruct;
+  Digest: TMD5Digest;
+  MD5Checked: Boolean;
+begin
+  for I := Low(CodecSearch) to High(CodecSearch) do
+    if CodecEnabled[I] then
+    begin
+      try
+        Pos := 0;
+        LSize := Size - Pred(Int64.Size);
+        while Pos < LSize do
+        begin
+          J := PWord(Input + Pos)^;
+          if (SearchCount[I, J] > 0) and
+            (CodecSearch[I, 0].HashSize <= (SizeEx - Pos)) then
+          begin
+            MD5Checked := False;
+            for X := 0 to SearchCount[I, J] - 1 do
+            begin
+              if (PInt64(Input + Pos)^ = CodecSearch[I, SearchInfo[I, J, X]]
+                .SearchInt) then
+              begin
+                if not MD5Checked then
+                  Funcs^.Hash('md5', Input + Pos, CodecSearch[I, 0].HashSize,
+                    @Digest[0], sizeof(TMD5Digest));
+                MD5Checked := True;
+              end;
+              if CompareMem(@CodecSearch[I, SearchInfo[I, J, X]].HashDigest[0],
+                @Digest[0], sizeof(TMD5Digest)) then
+              begin
+                ZIPFile[Instance].Open(ZIPStream[I], TZipMode.zmRead);
+                SS := @CodecSearch[I, SearchInfo[I, J, X]];
+                Z := ZIPFile[Instance].IndexOf(RightStr(SS^.Codec, 8));
+                Output(Instance, nil, -1);
+                for Y := Low(SS^.EntryList) to High(SS^.EntryList) do
+                begin
+                  SI.Position := Pos + SS^.EntryList[Y].Position;
+                  SI.OldSize := SS^.EntryList[Y].OldSize;
+                  SI.NewSize := SS^.EntryList[Y].NewSize;
+                  LongRec(SI.Resource).Lo := Y;
+                  LongRec(SI.Resource).Hi := Z;
+                  SI.Option := I;
+                  Add(Instance, @SI, nil, nil);
+                end;
+                ZIPFile[Instance].Close;
+                Inc(Pos);
+                continue;
+              end;
+            end;
+          end;
+          Inc(Pos);
+        end;
+      except
+        ShowMessage('error');
+      end;
+    end;
+end;
+
+function PrecompScan2(Instance: Integer; Input: Pointer; Size: Cardinal;
+  StreamInfo: PStrInfo2; Output: TPrecompOutput; Funcs: PPrecompFuncs)
+  : Boolean cdecl;
+var
+  Buffer: PByte;
+begin
+  Result := False;
+  if StreamInfo^.OldSize <= Size then
+  begin
+    Output(Instance, Input, StreamInfo^.OldSize);
+    Result := True;
+  end;
+end;
+
+function PrecompProcess(Instance: Integer; OldInput, NewInput: Pointer;
+  StreamInfo: PStrInfo2; Output: TPrecompOutput; Funcs: PPrecompFuncs)
+  : Boolean cdecl;
+var
+  ListEntry: PListEntry;
+begin
+  ListEntry := (PListEntry(@ZIPBytes[StreamInfo^.Option,
+    LongRec(StreamInfo^.Resource).Hi][0]) + LongRec(StreamInfo^.Resource).Lo);
+  Result := decrypt(NewInput, StreamInfo^.OldSize, @ListEntry^.key[0],
+    @ListEntry^.IVector[0]);
+  { Result := Funcs^.decrypt('xor', NewInput, StreamInfo^.NewSize,
+    @ListEntry^.key[0], Length(ListEntry^.key)); }
+end;
+
+function PrecompRestore(Instance: Integer; Input, InputExt: Pointer;
+  StreamInfo: TStrInfo3; Output: TPrecompOutput; Funcs: PPrecompFuncs)
+  : Boolean cdecl;
+var
+  Buffer: PByte;
+  ListEntry: PListEntry;
+begin
+  Result := False;
+  Buffer := Funcs^.Allocator(Instance, StreamInfo.OldSize);
+  Move(Input^, Buffer^, StreamInfo.OldSize);
+  ListEntry := (PListEntry(@ZIPBytes[StreamInfo.Option,
+    LongRec(StreamInfo.Resource).Hi][0]) + LongRec(StreamInfo.Resource).Lo);
+  if encrypt(Buffer, StreamInfo.OldSize, @ListEntry^.key[0],
+    @ListEntry^.IVector[0]) { Funcs^.encrypt('xor', Buffer, StreamInfo.NewSize,
+    @ListEntry^.key[0], Length(ListEntry^.key)) } then
+  begin
+    Output(Instance, Buffer, StreamInfo.OldSize);
+    Result := True;
+  end;
+end;
+
+exports PrecompInit, PrecompFree, PrecompCodec, PrecompScan1, PrecompScan2,
+  PrecompProcess, PrecompRestore;
+
+var
+  B: Boolean;
+  I, J, K: Integer;
+  S: String;
+  Bytes: TBytes;
+  FStream: TFileStream;
+  I32: Integer;
+  SearchStruct: PSearchStruct;
+  DLLStream: TResourceStream;
+  DLLHandle: TMemoryModule;
+  ZFile: TZipFile;
+
+begin
+  DLLStream := TResourceStream.Create(hInstance, 'PAK_DECRYPT_DLL', RT_RCDATA);
+  DLLHandle := MemoryLoadLibary(DLLStream.Memory);
+  @decrypt := MemoryGetProcAddress(DLLHandle, 'decrypt');
+  Assert(@decrypt <> nil);
+  @encrypt := MemoryGetProcAddress(DLLHandle, 'encrypt');
+  Assert(@encrypt <> nil);
+  SetLength(ZIPStream, Length(Codecs));
+  SetLength(ZIPBytes, Length(Codecs));
+  ZFile := TZipFile.Create;
+  for I := Low(ZIPStream) to High(ZIPStream) do
+  begin
+    ZIPStream[I] := TResourceStream.Create(hInstance,
+      Uppercase(Codecs[I] + '_ZIP'), RT_RCDATA);
+    ZFile.Open(ZIPStream[I], TZipMode.zmRead);
+    SetLength(ZIPBytes[I], ZFile.FileCount);
+    for J := Low(ZIPBytes[I]) to High(ZIPBytes[I]) do
+      ZFile.Read(J, ZIPBytes[I, J]);
+    ZFile.Close;
+  end;
+  ZFile.Free;
+  SearchList := TDirectory.GetFiles(ExtractFilePath(GetModuleName), '*.ced',
+    TSearchOption.soTopDirectoryOnly);
+  SetLength(CodecSearch, Length(Codecs));
+  for I := Low(SearchList) to High(SearchList) do
+  begin
+    FStream := TFileStream.Create(SearchList[I], fmShareDenyNone);
+    try
+      if FStream.Size >= 4 then
+      begin
+        FStream.ReadBuffer(I32, I32.Size);
+        if (I32 = XTOOL_DB) then
+        begin
+          if FStream.Position < FStream.Size then
+          begin
+            S := ChangeFileExt(ExtractFileName(SearchList[I]), '');
+            B := False;
+            for J := Low(Codecs) to High(Codecs) do
+            begin
+              B := CompareText(S, Codecs[J]) = 0;
+              K := J;
+              if B then
+                break;
+            end;
+            if not B then
+              continue;
+          end;
+          while FStream.Position < FStream.Size do
+          begin
+            New(SearchStruct);
+            SearchStruct^.Name := S;
+            FStream.ReadBuffer(SearchStruct^.SearchInt,
+              SearchStruct^.SearchInt.Size);
+            FStream.ReadBuffer(SearchStruct^.HashSize,
+              SearchStruct^.HashSize.Size);
+            FStream.ReadBuffer(SearchStruct^.HashDigest, sizeof(TMD5Digest));
+            FStream.ReadBuffer(I32, I32.Size);
+            SetLength(Bytes, I32);
+            FStream.ReadBuffer(Bytes[0], I32);
+            SearchStruct^.Codec := StringOf(Bytes);
+            Insert(SearchStruct^, CodecSearch[J], Length(CodecSearch[J]));
+            FStream.ReadBuffer(I32, I32.Size);
+            K := Pred(Length(CodecSearch[J]));
+            SetLength(CodecSearch[J, K].EntryList, I32);
+            FStream.ReadBuffer(CodecSearch[J, K].EntryList[0],
+              I32 * sizeof(TEntryStruct));
+          end;
+        end;
+      end;
+    finally
+      FStream.Free;
+    end;
+  end;
+  SetLength(SearchInfo, Length(Codecs));
+  SetLength(SearchCount, Length(Codecs));
+  SetLength(CodecAvailable, Length(Codecs));
+  SetLength(CodecEnabled, Length(Codecs));
+
+end.

@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<BorlandProject>
+	<Transactions>
+    <Transaction>2020/06/27 15:40:58.000.065,=C:\Users\Zee\Documents\Embarcadero\Studio\Projects\Unit6.pas</Transaction>
+    <Transaction>2020/06/27 15:43:01.000.990,C:\Users\Zee\Documents\Embarcadero\Studio\Projects\Project8.dproj=D:\xtool_2020\_example\zstd.dproj</Transaction>
+    <Transaction>2020/12/15 03:40:08.000.343,D:\xtool_2020\_example\example1.dproj=D:\xtool_2020\_example\zstd.dproj</Transaction>
+    <Transaction>2020/12/18 10:09:48.000.954,=D:\xtool_2020\_example\Unit1.pas</Transaction>
+    <Transaction>2020/12/18 10:11:16.000.264,D:\xtool_2020\_example\Unit1.pas=D:\xtool_2020\_example\Utils.pas</Transaction>
+    <Transaction>2020/12/22 06:16:43.000.697,=D:\xtool_2020\_example\Delphi_MemoryModule\FuncHook.pas</Transaction>
+    <Transaction>2020/12/22 06:16:43.000.789,=D:\xtool_2020\_example\Delphi_MemoryModule\MemoryModule.pas</Transaction>
+    <Transaction>2020/12/22 06:16:43.000.884,=D:\xtool_2020\_example\Delphi_MemoryModule\MemoryModuleHook.pas</Transaction>
+    <Transaction>2020/12/22 06:26:39.000.222,=D:\xtool_2020\_example\libdunia.dll</Transaction>
+    <Transaction>2021/01/06 01:26:27.000.402,D:\xtool_2020\_example\example1.dproj=D:\xtool_2020\_example\lz4dunia.dproj</Transaction>
+  </Transactions>
+</BorlandProject>
